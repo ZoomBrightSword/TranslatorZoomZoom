@@ -1,10 +1,11 @@
 from PySide6.QtCore import Qt, Slot
-from PySide6.QtWidgets import QWidget, QVBoxLayout, QTextEdit, QApplication
+from PySide6.QtWidgets import QWidget, QVBoxLayout, QTextEdit, QLabel, QApplication
 from config import config_manager
+from core.models import PipelineResult, PipelineStatus
 
 class TranslationWindow(QWidget):
     """
-    A separate, always-on-top window to display the translated text.
+    A separate, always-on-top window to display translated text and status.
     """
     def __init__(self):
         super().__init__()
@@ -13,14 +14,20 @@ class TranslationWindow(QWidget):
         # --- Window Configuration ---
         self.setWindowTitle("Translation")
         self.setWindowFlags(Qt.WindowStaysOnTopHint | Qt.Tool)
-        self.setGeometry(100, 100, 500, 200) # x, y, width, height
+        self.setGeometry(100, 100, 500, 220) # Increased height for status bar
 
         # --- Widgets ---
         self.layout = QVBoxLayout(self)
+        self.layout.setContentsMargins(5, 5, 5, 5)
+        self.layout.setSpacing(5)
+
         self.text_area = QTextEdit(self)
         self.text_area.setReadOnly(True)
-        self.text_area.setAcceptRichText(False) # Plain text only
+
+        self.status_bar = QLabel("Menginisialisasi...", self)
+
         self.layout.addWidget(self.text_area)
+        self.layout.addWidget(self.status_bar)
         self.setLayout(self.layout)
 
         # --- Styling ---
@@ -28,40 +35,53 @@ class TranslationWindow(QWidget):
         self.update_font_size()
 
     def _apply_styles(self):
-        """Applies basic styling to the window and text area."""
+        """Applies basic styling to the window and widgets."""
         self.setStyleSheet("""
             QWidget {
-                background-color: white;
+                background-color: #f0f0f0;
             }
             QTextEdit {
                 background-color: white;
                 color: black;
                 border: 1px solid #ccc;
+                font-family: Arial, sans-serif;
+            }
+            QLabel {
+                color: #555;
+                font-size: 9pt;
             }
         """)
 
-    @Slot(str)
-    def update_text(self, text: str):
+    @Slot(object)
+    def update_view(self, result: PipelineResult):
         """
-        Public slot to update the text in the text area.
-        This is connected to the orchestrator's signal.
+        Public slot to update the entire view based on a PipelineResult object.
         """
-        self.text_area.setPlainText(text)
-        # Scroll to the bottom to show the latest translation
-        self.text_area.verticalScrollBar().setValue(self.text_area.verticalScrollBar().maximum())
+        # Update the main text area only if there's new text
+        if result.text:
+            self.text_area.setPlainText(result.text)
+            # Scroll to the bottom to show the latest translation
+            self.text_area.verticalScrollBar().setValue(self.text_area.verticalScrollBar().maximum())
 
-    @Slot(str)
-    def display_error(self, error_message: str):
-        """
-        Displays an error message in the text area with different styling.
-        """
-        self.text_area.setHtml(f"<font color='red'>{error_message}</font>")
+        # Handle error state
+        if result.status == PipelineStatus.ERROR:
+            self.text_area.setHtml(f"<font color='red'><b>Error:</b> {result.error_message}</font>")
+            self.status_bar.setText(f"Status: Error")
+            return
+
+        # Update status bar
+        status_text = f"Status: {result.get_status_message()}"
+        if result.processing_time_ms > 0:
+            status_text += f" | Waktu: {result.processing_time_ms:.0f} ms"
+
+        self.status_bar.setText(status_text)
 
     @Slot()
     def copy_translation_to_clipboard(self):
         """Copies the current text to the clipboard."""
         QApplication.clipboard().setText(self.text_area.toPlainText())
-        self.display_error("Teks disalin ke clipboard.")
+        # Provide feedback via the status bar
+        self.status_bar.setText("Teks disalin ke clipboard.")
 
     @Slot()
     def increase_font_size(self):
@@ -81,16 +101,9 @@ class TranslationWindow(QWidget):
         font.setPointSize(self.current_font_size)
         self.text_area.setFont(font)
         config_manager.set("font_size", self.current_font_size)
-        # We can debounce this save call if needed
         config_manager.save()
 
     def closeEvent(self, event):
-        """
-        Save window position on close.
-        In a real app, we might want to just hide it or ask the user.
-        For now, closing this window will exit the app (as it's the main widget).
-        """
-        # A more robust implementation would handle closing the entire app
-        # from main.py when this window is closed.
+        """Ensures the application quits when this window is closed."""
         QApplication.quit()
         super().closeEvent(event)

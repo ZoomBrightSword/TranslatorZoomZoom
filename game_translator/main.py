@@ -23,9 +23,8 @@ def main():
     overlay_window = OverlayWindow()
 
     # --- Wire up signals and slots ---
-    # Connect orchestrator's translation result to the translation window
-    orchestrator.new_translation_ready.connect(translation_window.update_text)
-    orchestrator.error_occurred.connect(translation_window.display_error)
+    # Connect the orchestrator's pipeline update signal to the translation window's view
+    orchestrator.pipeline_update.connect(translation_window.update_view)
 
     # Connect overlay's area selection to the orchestrator
     overlay_window.capture_area_selected.connect(orchestrator.set_capture_area)

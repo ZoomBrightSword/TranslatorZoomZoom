@@ -4,6 +4,7 @@ from PySide6.QtCore import QObject, Signal, QThread
 from core.capture import CaptureEngine
 from core.ocr import OcrEngine
 from core.translation_manager import TranslationManager
+from core.models import PipelineResult, PipelineStatus
 from config import config_manager
 from utils.text_utils import clean_text
 
@@ -12,9 +13,9 @@ class PipelineWorker(QObject):
     """
     This worker object will run the main processing loop in a separate thread.
     """
-    # Signals to communicate with the main thread (UI)
-    new_translation_ready = Signal(str)
-    error_occurred = Signal(str)
+    # Signal to communicate with the main thread (UI)
+    # It emits a PipelineResult object containing all relevant data.
+    pipeline_update = Signal(object)
 
     def __init__(self):
         super().__init__()
@@ -40,39 +41,62 @@ class PipelineWorker(QObject):
         self.is_running = True
         while self.is_running:
             if self.is_paused:
-                time.sleep(0.5)  # Sleep when paused to reduce CPU usage
+                time.sleep(0.5)
                 continue
 
-            # --- Main Pipeline ---
-            # 1. Capture
-            frame = self.capture_engine.capture_frame()
-            if frame is None:
-                time.sleep(0.1)
-                continue
+            start_time = time.time()
 
-            # 2. OCR
-            ocr_result = self.ocr_engine.process_image(frame)
-            if not ocr_result or not ocr_result.text:
-                time.sleep(0.1)
-                continue
+            try:
+                # 1. Capture
+                self.pipeline_update.emit(PipelineResult(status=PipelineStatus.CAPTURING))
+                frame = self.capture_engine.capture_frame()
+                if frame is None:
+                    time.sleep(0.1)
+                    continue
 
-            # 3. Clean and Hash Text
-            cleaned_text = clean_text(ocr_result.text)
-            current_text_hash = hashlib.md5(cleaned_text.encode()).hexdigest()
+                # 2. OCR
+                self.pipeline_update.emit(PipelineResult(status=PipelineStatus.OCR))
+                ocr_result = self.ocr_engine.process_image(frame)
+                if not ocr_result or not ocr_result.text:
+                    self.pipeline_update.emit(PipelineResult(status=PipelineStatus.IDLE))
+                    time.sleep(0.1)
+                    continue
 
-            # 4. Diffing (check if text has changed)
-            if current_text_hash != self.last_text_hash:
-                # Debounce: wait a bit to see if text settles
-                if time.time() - self.last_capture_time > self.debounce_time:
-                    self.last_text_hash = current_text_hash
+                # 3. Clean and Hash Text
+                cleaned_text = clean_text(ocr_result.text)
+                current_text_hash = hashlib.md5(cleaned_text.encode()).hexdigest()
 
-                    # 5. Translate
-                    translated_text = self.translation_manager.translate(cleaned_text)
-                    if translated_text:
-                        # 6. Emit result
-                        self.new_translation_ready.emit(translated_text)
+                # 4. Diffing (check if text has changed)
+                if current_text_hash != self.last_text_hash:
+                    if time.time() - self.last_capture_time > self.debounce_time:
+                        self.last_text_hash = current_text_hash
 
-                    self.last_capture_time = time.time()
+                        # 5. Translate
+                        self.pipeline_update.emit(PipelineResult(status=PipelineStatus.TRANSLATING))
+                        translated_text = self.translation_manager.translate(cleaned_text)
+
+                        if translated_text:
+                            # 6. Emit final result
+                            processing_time = (time.time() - start_time) * 1000
+                            result = PipelineResult(
+                                text=translated_text,
+                                status=PipelineStatus.IDLE,
+                                processing_time_ms=processing_time
+                            )
+                            self.pipeline_update.emit(result)
+
+                        self.last_capture_time = time.time()
+                else:
+                    # Emit an IDLE status if text hasn't changed
+                    self.pipeline_update.emit(PipelineResult(status=PipelineStatus.IDLE))
+
+            except Exception as e:
+                error_result = PipelineResult(
+                    status=PipelineStatus.ERROR,
+                    error_message=str(e)
+                )
+                self.pipeline_update.emit(error_result)
+                time.sleep(2) # Pause briefly after an error
 
             # Limit FPS
             time.sleep(1 / 15) # Cap at ~15 FPS
@@ -87,9 +111,8 @@ class Orchestrator(QObject):
     Manages the pipeline worker and thread, and provides a clean interface
     for the rest of the application.
     """
-    # Expose signals from the worker
-    new_translation_ready = Signal(str)
-    error_occurred = Signal(str)
+    # Expose the signal from the worker
+    pipeline_update = Signal(object)
 
     def __init__(self):
         super().__init__()
@@ -100,8 +123,7 @@ class Orchestrator(QObject):
         self._worker.moveToThread(self._thread)
 
         # Connect signals
-        self._worker.new_translation_ready.connect(self.new_translation_ready)
-        self._worker.error_occurred.connect(self.error_occurred)
+        self._worker.pipeline_update.connect(self.pipeline_update)
         self._thread.started.connect(self._worker.run)
 
         # Load initial config
@@ -122,11 +144,15 @@ class Orchestrator(QObject):
         self._worker.is_paused = not self._worker.is_paused
         status = "PAUSED" if self._worker.is_paused else "RUNNING"
         print(f"Capture state changed to: {status}")
+
         if self._worker.is_paused:
-            self.new_translation_ready.emit(f"Penerjemahan dijeda. Tekan Ctrl+Shift+2 untuk melanjutkan.")
+            result = PipelineResult(status=PipelineStatus.PAUSED)
+            self.pipeline_update.emit(result)
         else:
-            self.new_translation_ready.emit(f"Penerjemahan dimulai...")
-            self._worker.last_text_hash = None # Reset hash to force translation
+            # When resuming, reset the hash to force a new translation
+            self._worker.last_text_hash = None
+            result = PipelineResult(status=PipelineStatus.IDLE)
+            self.pipeline_update.emit(result)
 
     def __del__(self):
         """Ensure the thread is cleaned up properly."""
