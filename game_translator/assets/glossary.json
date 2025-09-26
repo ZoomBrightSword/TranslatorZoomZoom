@@ -1,0 +1,10 @@
+{
+    "terms": {
+        "Potion Kesehatan": "Ramuan Kesehatan",
+        "Poin Pengalaman": "EXP",
+        "Memuat dimuat......... Memuat......": "Memuat..."
+    },
+    "settings": {
+        "case_sensitive": false
+    }
+}

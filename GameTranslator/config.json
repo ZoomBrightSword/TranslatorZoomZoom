@@ -1,0 +1,16 @@
+{
+    "capture_area": [
+        100,
+        100,
+        400,
+        200
+    ],
+    "font_size": 12,
+    "last_window_positions": {
+        "translation_window": [
+            100,
+            100
+        ]
+    },
+    "translation_backend": "local"
+}
