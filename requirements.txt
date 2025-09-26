@@ -5,4 +5,7 @@ ctranslate2
 pynput
 numpy
 opencv-python
---find-links https://extra-repo.ctranslate2.openvinotoolkit.org/python-wheels/ctranslate2-4.0.0-cp311-cp311-win_amd64.whl
+sacremoses
+transformers
+torch
+pytest

@@ -1,6 +1,7 @@
 from .translation_backends.local_translator import LocalTranslator
 from .translation_backends.api_translator import ApiTranslator
 from ..config import config_manager
+from ..utils.logger import log
 
 class TranslationManager:
     """
@@ -21,14 +22,14 @@ class TranslationManager:
         Defaults to 'local' if the setting is not found.
         """
         backend_name = config_manager.get("translation_backend", "local")
-        print(f"Selected translation backend: {backend_name}")
+        log.info(f"Selected translation backend: {backend_name}")
 
         if backend_name == "api":
             self.backend = ApiTranslator()
         elif backend_name == "local":
             self.backend = LocalTranslator()
         else:
-            print(f"Warning: Unknown backend '{backend_name}'. Defaulting to 'local'.")
+            log.warning(f"Unknown backend '{backend_name}'. Defaulting to 'local'.")
             self.backend = LocalTranslator()
 
     def load_glossary(self, glossary_path: str):
@@ -41,15 +42,9 @@ class TranslationManager:
     def translate(self, text: str) -> str | None:
         """
         Routes the translation request to the active backend.
-
-        Args:
-            text (str): The text to translate.
-
-        Returns:
-            str | None: The translated text or None on failure.
         """
         if self.backend:
             return self.backend.translate(text)
         else:
-            print("Error: No translation backend is active.")
+            log.error("No translation backend is active.")
             return None

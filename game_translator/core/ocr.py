@@ -2,6 +2,8 @@ import pytesseract
 import numpy as np
 import cv2
 from dataclasses import dataclass
+from config import config_manager
+from utils.logger import log
 
 @dataclass
 class OcrResult:
@@ -14,68 +16,78 @@ class OcrResult:
 class OcrEngine:
     """
     Handles Optical Character Recognition (OCR) using Tesseract.
+    Supports different quality settings for preprocessing.
     """
     def __init__(self, tesseract_cmd_path: str = None):
         """
         Initializes the OCR engine.
-
-        Args:
-            tesseract_cmd_path (str, optional): Path to the Tesseract executable.
-                                                If None, it's assumed to be in the system's PATH.
         """
         if tesseract_cmd_path:
             pytesseract.pytesseract.tesseract_cmd = tesseract_cmd_path
-
-        # You might need to specify language and other configs for better accuracy
         self.tesseract_config = r'--oem 3 --psm 6 -l eng'
 
-    def _preprocess_image(self, image: np.ndarray) -> np.ndarray:
+    def _preprocess_image(self, image: np.ndarray, quality: str, primary: bool) -> np.ndarray:
         """
-        Applies pre-processing steps to the image to improve OCR accuracy.
-
-        Args:
-            image (np.ndarray): The input image (BGRA from mss).
-
-        Returns:
-            np.ndarray: The processed image (grayscale).
+        Applies pre-processing steps to the image based on the quality and attempt.
         """
-        # Convert from BGRA to Grayscale
-        gray_image = cv2.cvtColor(image, cv2.COLOR_BGRA2GRAY)
+        gray = cv2.cvtColor(image, cv2.COLOR_BGRA2GRAY)
 
-        # Apply a slight blur to reduce noise
-        # blurred = cv2.GaussianBlur(gray_image, (3, 3), 0)
-
-        # Apply thresholding to get a binary image. This is crucial for OCR.
-        # We use OTSU's binarization which automatically determines the threshold.
-        _, binary_image = cv2.threshold(gray_image, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-
-        return binary_image
+        if primary:
+            # --- Primary Attempt ---
+            if quality == "quality":
+                # Upscale, denoise, then use Otsu's thresholding
+                h, w = gray.shape
+                upscaled = cv2.resize(gray, (w * 2, h * 2), interpolation=cv2.INTER_CUBIC)
+                denoised = cv2.fastNlMeansDenoising(upscaled, None, h=10, templateWindowSize=7, searchWindowSize=21)
+                _, binary_image = cv2.threshold(denoised, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+                return binary_image
+            else:
+                # Simple global thresholding for speed
+                _, binary_image = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+                return binary_image
+        else:
+            # --- Fallback Attempt ---
+            # Use adaptive thresholding, which is good for uneven lighting
+            # but can be slower.
+            return cv2.adaptiveThreshold(
+                gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 11, 2
+            )
 
     def process_image(self, image: np.ndarray) -> OcrResult | None:
         """
-        Performs OCR on a given image.
-
-        Args:
-            image (np.ndarray): The image to process.
-
-        Returns:
-            OcrResult | None: The result of the OCR, or None if no text is found.
+        Performs OCR on a given image, using the configured quality setting.
         """
         if image is None:
             return None
 
-        preprocessed_image = self._preprocess_image(image)
+        # Get quality setting from the config manager
+        quality = config_manager.get("ocr_quality", "speed")
 
+        # --- Primary OCR Attempt ---
+        preprocessed_image = self._preprocess_image(image, quality, primary=True)
+        result = self._perform_ocr_on_image(preprocessed_image)
+
+        # --- Fallback OCR Attempt ---
+        # If the primary attempt fails, try a different preprocessing strategy
+        if result is None:
+            log.info("Primary OCR failed. Trying fallback preprocessing...")
+            fallback_image = self._preprocess_image(image, quality, primary=False)
+            result = self._perform_ocr_on_image(fallback_image)
+            if result:
+                log.info("Fallback OCR successful.")
+
+        return result
+
+    def _perform_ocr_on_image(self, image: np.ndarray) -> OcrResult | None:
+        """Helper function to run Tesseract on a preprocessed image."""
         try:
-            # Use pytesseract to get detailed data, including confidence
-            data = pytesseract.image_to_data(preprocessed_image, config=self.tesseract_config, output_type=pytesseract.Output.DICT)
+            data = pytesseract.image_to_data(image, config=self.tesseract_config, output_type=pytesseract.Output.DICT)
 
             text_parts = []
             confidences = []
 
-            # Filter out low-confidence results
             for i in range(len(data['text'])):
-                if int(data['conf'][i]) > 50: # Confidence threshold
+                if int(data['conf'][i]) > 50:
                     text = data['text'][i].strip()
                     if text:
                         text_parts.append(text)
@@ -86,14 +98,12 @@ class OcrEngine:
 
             full_text = " ".join(text_parts)
             avg_confidence = sum(confidences) / len(confidences) if confidences else 0.0
-
             return OcrResult(text=full_text, confidence=avg_confidence)
 
         except pytesseract.TesseractNotFoundError:
-            print("Tesseract Error: The Tesseract executable was not found.")
-            print("Please install Tesseract and ensure it's in your system's PATH.")
+            log.error("Tesseract Error: The Tesseract executable was not found. Please install Tesseract and ensure it's in your system's PATH.")
             # We should probably signal this error to the UI.
             return OcrResult(text="TESSERACT NOT FOUND", confidence=0.0)
         except Exception as e:
-            print(f"An unexpected error occurred in OCR: {e}")
+            log.error(f"An unexpected error occurred in OCR: {e}")
             return None

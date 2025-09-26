@@ -1,5 +1,6 @@
 import mss
 import numpy as np
+from utils.logger import log
 
 class CaptureEngine:
     """
@@ -11,6 +12,7 @@ class CaptureEngine:
         """
         self.sct = mss.mss()
         self.capture_area = {"top": 100, "left": 100, "width": 400, "height": 200}
+        log.info("CaptureEngine initialized.")
 
     def set_capture_area(self, rect: list[int]):
         """
@@ -21,7 +23,7 @@ class CaptureEngine:
         """
         if rect and len(rect) == 4:
             self.capture_area = {"left": rect[0], "top": rect[1], "width": rect[2], "height": rect[3]}
-            print(f"Capture area set to: {self.capture_area}")
+            log.info(f"Capture area set to: {self.capture_area}")
 
     def capture_frame(self) -> np.ndarray | None:
         """
@@ -41,7 +43,7 @@ class CaptureEngine:
             img = np.array(sct_img)
             return img
         except mss.exception.ScreenShotError as e:
-            print(f"Error during screen capture: {e}")
+            log.error(f"Error during screen capture: {e}")
             return None
 
     def close(self):

@@ -4,6 +4,7 @@ import json
 import re
 from pathlib import Path
 from transformers import AutoTokenizer
+from ...utils.logger import log
 
 # Define paths for the local model
 MODEL_DIR = Path.home() / ".GameTranslator" / "models" / "enid_ctranslate2"
@@ -26,9 +27,9 @@ class LocalTranslator:
         try:
             self.translator = ctranslate2.Translator(self.model_path, device="cpu")
             self.tokenizer = AutoTokenizer.from_pretrained(HF_MODEL_NAME)
-            print("Local CTranslate2 model and tokenizer loaded successfully.")
+            log.info("Local CTranslate2 model and tokenizer loaded successfully.")
         except Exception as e:
-            print(f"Failed to load local model or tokenizer: {e}")
+            log.error(f"Failed to load local model or tokenizer: {e}")
             self.translator = None
             self.tokenizer = None
 
@@ -42,9 +43,9 @@ class LocalTranslator:
                 self.glossary = data.get("terms", {})
                 settings = data.get("settings", {})
                 self.case_sensitive = settings.get("case_sensitive", False)
-                print("Glossary loaded for local translator.")
+                log.info("Glossary loaded for local translator.")
         except (IOError, json.JSONDecodeError) as e:
-            print(f"Could not load or parse glossary file: {e}")
+            log.error(f"Could not load or parse glossary file: {e}")
             self.glossary = {}
 
     def _apply_glossary(self, text: str) -> str:
@@ -83,5 +84,5 @@ class LocalTranslator:
             final_text = self._apply_glossary(translated_text)
             return final_text
         except Exception as e:
-            print(f"Error during local translation: {e}")
+            log.error(f"Error during local translation: {e}")
             return None

@@ -7,6 +7,7 @@ from core.translation_manager import TranslationManager
 from core.models import PipelineResult, PipelineStatus
 from config import config_manager
 from utils.text_utils import clean_text
+from utils.logger import log
 
 # --- Worker Class for the Pipeline ---
 class PipelineWorker(QObject):
@@ -24,6 +25,10 @@ class PipelineWorker(QObject):
         self.last_text_hash = None
         self.debounce_time = 0.2  # 200ms debounce
         self.last_capture_time = 0
+
+        # In-memory cache for translations to avoid re-translating common sentences
+        self.translation_cache = {}
+        self.MAX_CACHE_SIZE = 200
 
         # Initialize core components
         self.capture_engine = CaptureEngine()
@@ -71,19 +76,35 @@ class PipelineWorker(QObject):
                     if time.time() - self.last_capture_time > self.debounce_time:
                         self.last_text_hash = current_text_hash
 
-                        # 5. Translate
-                        self.pipeline_update.emit(PipelineResult(status=PipelineStatus.TRANSLATING))
-                        translated_text = self.translation_manager.translate(cleaned_text)
-
-                        if translated_text:
-                            # 6. Emit final result
+                        # 5. Check cache first
+                        if cleaned_text in self.translation_cache:
+                            translated_text = self.translation_cache[cleaned_text]
                             processing_time = (time.time() - start_time) * 1000
                             result = PipelineResult(
-                                text=translated_text,
+                                text=f"[Cache] {translated_text}",
                                 status=PipelineStatus.IDLE,
                                 processing_time_ms=processing_time
                             )
                             self.pipeline_update.emit(result)
+                        else:
+                            # If not in cache, translate and then store it
+                            self.pipeline_update.emit(PipelineResult(status=PipelineStatus.TRANSLATING))
+                            translated_text = self.translation_manager.translate(cleaned_text)
+
+                            if translated_text:
+                                # Add to cache
+                                if len(self.translation_cache) > self.MAX_CACHE_SIZE:
+                                    self.translation_cache.clear() # Simple cache eviction
+                                self.translation_cache[cleaned_text] = translated_text
+
+                                # Emit final result
+                                processing_time = (time.time() - start_time) * 1000
+                                result = PipelineResult(
+                                    text=translated_text,
+                                    status=PipelineStatus.IDLE,
+                                    processing_time_ms=processing_time
+                                )
+                                self.pipeline_update.emit(result)
 
                         self.last_capture_time = time.time()
                 else:
@@ -143,7 +164,7 @@ class Orchestrator(QObject):
         """Starts or pauses the capture pipeline."""
         self._worker.is_paused = not self._worker.is_paused
         status = "PAUSED" if self._worker.is_paused else "RUNNING"
-        print(f"Capture state changed to: {status}")
+        log.info(f"Capture state changed to: {status}")
 
         if self._worker.is_paused:
             result = PipelineResult(status=PipelineStatus.PAUSED)
